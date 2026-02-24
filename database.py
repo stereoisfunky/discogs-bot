@@ -75,6 +75,16 @@ def get_history(limit: int = 20) -> list[dict]:
     ]
 
 
+def get_recent_artists(limit: int = 10) -> list[str]:
+    """Return artists from the last N suggestions (for deduplication)."""
+    with _connect() as conn:
+        rows = conn.execute(
+            "SELECT artist FROM suggestions ORDER BY sent_at DESC LIMIT ?",
+            (limit,),
+        ).fetchall()
+    return [r[0] for r in rows if r[0]]
+
+
 def get_rated_history() -> dict[str, list[str]]:
     """Return liked (4-5★) and disliked (1-2★) suggestions for Claude context."""
     with _connect() as conn:

@@ -39,13 +39,19 @@ Rules:
 """
 
 
-def _ask_claude(taste_summary: str, already_suggested: list[str], rated: dict) -> dict:
+def _ask_claude(taste_summary: str, already_suggested: list[str], rated: dict, recent_artists: list[str]) -> dict:
     client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
 
     exclusion = ""
     if already_suggested:
         exclusion = "\n\nDo NOT suggest any of these already-sent records:\n" + "\n".join(
             f"- {s}" for s in already_suggested[-30:]
+        )
+
+    artist_exclusion = ""
+    if recent_artists:
+        artist_exclusion = "\n\nDo NOT suggest any of these artists — they were suggested recently:\n" + "\n".join(
+            f"- {a}" for a in recent_artists
         )
 
     rating_context = ""
@@ -58,7 +64,7 @@ def _ask_claude(taste_summary: str, already_suggested: list[str], rated: dict) -
 
     user_message = (
         f"Here is the collector's taste profile:\n\n{taste_summary}"
-        f"{rating_context}{exclusion}\n\n"
+        f"{rating_context}{exclusion}{artist_exclusion}\n\n"
         "Please suggest one vinyl or cassette record they would love. Respond only with the JSON."
     )
 
@@ -96,11 +102,12 @@ def get_suggestion(max_attempts: int = 5) -> dict | None:
     history = database.get_history(limit=50)
     already_suggested = [f"{h['artist']} – {h['title']}" for h in history]
     rated = database.get_rated_history()
+    recent_artists = database.get_recent_artists(limit=10)
 
     for attempt in range(1, max_attempts + 1):
         print(f"Asking Claude for suggestion (attempt {attempt}/{max_attempts})…")
         try:
-            suggestion = _ask_claude(taste_summary, already_suggested, rated)
+            suggestion = _ask_claude(taste_summary, already_suggested, rated, recent_artists)
         except (json.JSONDecodeError, KeyError, IndexError) as e:
             print(f"  Claude response parse error: {e}")
             continue
@@ -112,6 +119,11 @@ def get_suggestion(max_attempts: int = 5) -> dict | None:
         fmt = suggestion.get("format", "Vinyl")
 
         print(f"  Claude suggests: {artist} – {title} ({year}) [{fmt}]")
+
+        if artist in recent_artists:
+            print(f"  Artist '{artist}' was suggested recently, retrying…")
+            already_suggested.append(f"{artist} – {title}")
+            continue
 
         result = discogs.search_release(artist, title)
         if result is None:
