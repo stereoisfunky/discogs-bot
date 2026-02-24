@@ -15,6 +15,8 @@ DAILY_HOUR = int(os.getenv("DAILY_HOUR", 9))
 DAILY_MINUTE = int(os.getenv("DAILY_MINUTE", 0))
 
 DB_PATH = os.path.join(os.path.dirname(__file__), "suggestions.db")
+CACHE_PATH = os.path.join(os.path.dirname(__file__), "discogs_cache.json")
+CACHE_TTL_HOURS = 168  # 1 week
 
 def validate():
     required = {

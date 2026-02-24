@@ -9,6 +9,9 @@ __pycache__/
 # Database (personal history)
 suggestions.db
 
+# Discogs cache
+discogs_cache.json
+
 # Logs
 bot.log
 

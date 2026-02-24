@@ -1,10 +1,13 @@
 """
 Discogs API helpers using the REST API directly.
 """
+import json
+import os
 import re
 import time
+from datetime import datetime, timezone
 import requests
-from config import DISCOGS_TOKEN, DISCOGS_USERNAME
+from config import DISCOGS_TOKEN, DISCOGS_USERNAME, CACHE_PATH, CACHE_TTL_HOURS
 
 BASE_URL = "https://api.discogs.com"
 HEADERS = {
@@ -49,6 +52,38 @@ def _fetch_all_pages(url: str, data_key: str, extra_params: dict = None) -> list
 
 
 # ---------------------------------------------------------------------------
+# Cache helpers
+# ---------------------------------------------------------------------------
+
+def _cache_is_fresh() -> bool:
+    if not os.path.exists(CACHE_PATH):
+        return False
+    try:
+        with open(CACHE_PATH) as f:
+            data = json.load(f)
+        cached_at = datetime.fromisoformat(data["cached_at"])
+        age_hours = (datetime.now(timezone.utc) - cached_at).total_seconds() / 3600
+        return age_hours < CACHE_TTL_HOURS
+    except Exception:
+        return False
+
+
+def _load_cache() -> tuple[list, list]:
+    with open(CACHE_PATH) as f:
+        data = json.load(f)
+    return data["collection"], data["wantlist"]
+
+
+def _save_cache(collection: list, wantlist: list):
+    with open(CACHE_PATH, "w") as f:
+        json.dump({
+            "cached_at": datetime.now(timezone.utc).isoformat(),
+            "collection": collection,
+            "wantlist": wantlist,
+        }, f)
+
+
+# ---------------------------------------------------------------------------
 # Collection / wantlist fetching
 # ---------------------------------------------------------------------------
 
@@ -62,6 +97,23 @@ def fetch_wantlist() -> list[dict]:
     url = f"{BASE_URL}/users/{DISCOGS_USERNAME}/wants"
     items = _fetch_all_pages(url, "wants")
     return [_parse_basic(item) for item in items]
+
+
+def fetch_collection_and_wantlist() -> tuple[list[dict], list[dict]]:
+    """
+    Return (collection, wantlist), using a local cache refreshed every 24 hours.
+    This avoids hitting the Discogs API on every suggestion request.
+    """
+    if _cache_is_fresh():
+        print("  Using cached Discogs data.")
+        return _load_cache()
+
+    print("  Cache stale or missing — fetching from Discogs…")
+    collection = fetch_collection()
+    wantlist = fetch_wantlist()
+    _save_cache(collection, wantlist)
+    print(f"  Cached {len(collection)} collection + {len(wantlist)} wantlist items.")
+    return collection, wantlist
 
 
 def _parse_basic(item: dict) -> dict:

@@ -87,13 +87,9 @@ def get_suggestion(max_attempts: int = 5) -> dict | None:
     find it on Discogs, fetch rarity stats.
     Returns a dict or None if all attempts fail.
     """
-    print("Fetching Discogs collection…")
-    collection = discogs.fetch_collection()
-    print(f"  {len(collection)} records in collection")
-
-    print("Fetching Discogs wantlist…")
-    wantlist = discogs.fetch_wantlist()
-    print(f"  {len(wantlist)} records in wantlist")
+    print("Loading Discogs collection and wantlist…")
+    collection, wantlist = discogs.fetch_collection_and_wantlist()
+    print(f"  {len(collection)} collection + {len(wantlist)} wantlist items")
 
     profile = discogs.build_taste_profile(collection, wantlist)
     taste_summary = discogs.format_profile_for_prompt(profile)
