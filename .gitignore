@@ -1,0 +1,16 @@
+# API keys — never commit this
+.env
+
+# Python
+venv/
+__pycache__/
+*.pyc
+
+# Database (personal history)
+suggestions.db
+
+# Logs
+bot.log
+
+# macOS
+.DS_Store
