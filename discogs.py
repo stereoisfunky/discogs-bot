@@ -188,28 +188,37 @@ def format_profile_for_prompt(profile: dict) -> str:
 def search_release(artist: str, title: str) -> dict | None:
     """
     Search Discogs for a specific release, accepting only Vinyl or Cassette.
-    Collects all matching pressings and returns the oldest one.
+    Uses a free-text query for reliability, then filters by format from results.
+    Returns the oldest matching pressing.
     """
+    params = {
+        "q": f"{artist} {title}",
+        "type": "release",
+        "per_page": 25,
+    }
+    data = _get(f"{BASE_URL}/database/search", params=params)
+
     candidates = []
-    for fmt in ("Vinyl", "Cassette"):
-        params = {
-            "artist": artist,
-            "release_title": title,
-            "format": fmt,
-            "type": "release",
-            "per_page": 10,
-        }
-        data = _get(f"{BASE_URL}/database/search", params=params)
-        for r in data.get("results", []):
-            release_id = str(r.get("id", ""))
-            if release_id:
-                candidates.append({
-                    "id": release_id,
-                    "title": r.get("title", ""),
-                    "url": f"https://www.discogs.com/release/{release_id}",
-                    "year": r.get("year"),
-                    "format": fmt,
-                })
+    for r in data.get("results", []):
+        release_id = str(r.get("id", ""))
+        if not release_id:
+            continue
+        # formats is a list of strings like ["Vinyl", "LP", "Album"] or ["Cassette"]
+        formats = r.get("formats") or []
+        format_names = {f.get("name", "") for f in formats} if isinstance(formats[0], dict) else set(formats)
+        matched_fmt = None
+        if "Vinyl" in format_names:
+            matched_fmt = "Vinyl"
+        elif "Cassette" in format_names:
+            matched_fmt = "Cassette"
+        if matched_fmt:
+            candidates.append({
+                "id": release_id,
+                "title": r.get("title", ""),
+                "url": f"https://www.discogs.com/release/{release_id}",
+                "year": r.get("year"),
+                "format": matched_fmt,
+            })
 
     if not candidates:
         return None
