@@ -98,6 +98,7 @@ def get_suggestion(max_attempts: int = 5) -> dict | None:
     profile = discogs.build_taste_profile(collection, wantlist)
     taste_summary = discogs.format_profile_for_prompt(profile)
     owned_ids = discogs.get_owned_ids(collection, wantlist)
+    owned_titles = discogs.get_owned_titles(collection, wantlist)
 
     history = database.get_history(limit=50)
     already_suggested = [f"{h['artist']} – {h['title']}" for h in history]
@@ -122,6 +123,12 @@ def get_suggestion(max_attempts: int = 5) -> dict | None:
 
         if artist in recent_artists:
             print(f"  Artist '{artist}' was suggested recently, retrying…")
+            already_suggested.append(f"{artist} – {title}")
+            continue
+
+        # Reject if any version of this album is already owned
+        if (discogs.normalize(artist), discogs.normalize(title)) in owned_titles:
+            print(f"  User already owns a version of '{artist} – {title}', retrying…")
             already_suggested.append(f"{artist} – {title}")
             continue
 

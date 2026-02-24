@@ -1,6 +1,7 @@
 """
 Discogs API helpers using the REST API directly.
 """
+import re
 import time
 import requests
 from config import DISCOGS_TOKEN, DISCOGS_USERNAME
@@ -12,6 +13,16 @@ HEADERS = {
 }
 
 ALLOWED_FORMATS = {"Vinyl", "Cassette"}
+
+
+def normalize(s: str) -> str:
+    """Normalize a string for loose matching across represses/reissues."""
+    s = s.lower().strip()
+    s = re.sub(r'\(.*?\)', '', s)       # remove parenthetical suffixes e.g. (Remastered)
+    s = re.sub(r'[^a-z0-9\s]', '', s)  # strip punctuation
+    s = re.sub(r'\s+', ' ', s).strip()
+    s = re.sub(r'^the\s+', '', s)       # ignore leading "The"
+    return s
 
 
 def _get(url, params=None) -> dict:
@@ -125,28 +136,35 @@ def format_profile_for_prompt(profile: dict) -> str:
 def search_release(artist: str, title: str) -> dict | None:
     """
     Search Discogs for a specific release, accepting only Vinyl or Cassette.
-    Tries each allowed format in turn.
+    Collects all matching pressings and returns the oldest one.
     """
+    candidates = []
     for fmt in ("Vinyl", "Cassette"):
         params = {
             "artist": artist,
             "release_title": title,
             "format": fmt,
             "type": "release",
-            "per_page": 5,
+            "per_page": 10,
         }
         data = _get(f"{BASE_URL}/database/search", params=params)
         for r in data.get("results", []):
             release_id = str(r.get("id", ""))
             if release_id:
-                return {
+                candidates.append({
                     "id": release_id,
                     "title": r.get("title", ""),
                     "url": f"https://www.discogs.com/release/{release_id}",
                     "year": r.get("year"),
                     "format": fmt,
-                }
-    return None
+                })
+
+    if not candidates:
+        return None
+
+    # Prefer the oldest pressing; entries without a year go last
+    candidates.sort(key=lambda r: (r["year"] is None, int(r["year"]) if r["year"] else 9999))
+    return candidates[0]
 
 
 # ---------------------------------------------------------------------------
@@ -185,3 +203,17 @@ def calculate_rarity(have: int, want: int) -> tuple[str, str]:
 
 def get_owned_ids(collection: list[dict], wantlist: list[dict]) -> set[str]:
     return {item["id"] for item in collection + wantlist}
+
+
+def get_owned_titles(collection: list[dict], wantlist: list[dict]) -> set[tuple[str, str]]:
+    """
+    Return a set of normalized (artist, title) pairs for every owned release,
+    so any repress or reissue of the same album can be detected and excluded.
+    """
+    owned = set()
+    for item in collection + wantlist:
+        artists = item.get("artists", [])
+        title = item.get("title", "")
+        if artists and title:
+            owned.add((normalize(artists[0]), normalize(title)))
+    return owned
