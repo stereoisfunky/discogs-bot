@@ -198,11 +198,24 @@ def format_profile_for_prompt(profile: dict) -> str:
 # Release search (vinyl & cassette only)
 # ---------------------------------------------------------------------------
 
+def _artist_matches(suggested_artist: str, result_title: str) -> bool:
+    """
+    Discogs search results return title as "Artist - Album".
+    Check that the suggested artist appears in the result's artist portion.
+    """
+    norm_suggested = normalize(suggested_artist)
+    # result_title is "Artist Name - Album Title"
+    result_artist = result_title.split(" - ")[0] if " - " in result_title else result_title
+    norm_result = normalize(result_artist)
+    # Accept if either contains the other (handles "Maurizio" matching "Maurizio")
+    return norm_suggested in norm_result or norm_result in norm_suggested
+
+
 def search_release(artist: str, title: str) -> dict | None:
     """
     Search Discogs for a specific release, accepting only Vinyl or Cassette.
-    Uses a free-text query for reliability, then filters by format from results.
-    Returns the oldest matching pressing.
+    Uses a free-text query for reliability, validates artist match, and
+    returns the oldest matching pressing.
     """
     params = {
         "q": f"{artist} {title}",
@@ -216,7 +229,12 @@ def search_release(artist: str, title: str) -> dict | None:
         release_id = str(r.get("id", ""))
         if not release_id:
             continue
-        # formats is a list of strings like ["Vinyl", "LP", "Album"] or ["Cassette"]
+
+        # Validate that the result's artist actually matches the suggested artist
+        result_title = r.get("title", "")
+        if not _artist_matches(artist, result_title):
+            continue
+
         formats = r.get("formats") or []
         format_names = {f.get("name", "") for f in formats} if isinstance(formats[0], dict) else set(formats)
         matched_fmt = None
@@ -227,7 +245,7 @@ def search_release(artist: str, title: str) -> dict | None:
         if matched_fmt:
             candidates.append({
                 "id": release_id,
-                "title": r.get("title", ""),
+                "title": result_title,
                 "url": f"https://www.discogs.com/release/{release_id}",
                 "year": r.get("year"),
                 "format": matched_fmt,
