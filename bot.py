@@ -7,9 +7,9 @@ Commands:
   /history – show last 10 suggestions
 """
 import asyncio
+import datetime
 import logging
 
-from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, CallbackQueryHandler, ContextTypes
 from telegram.constants import ParseMode
@@ -125,22 +125,20 @@ async def handle_rating(update: Update, context: ContextTypes.DEFAULT_TYPE):
     rating = int(rating_str)
 
     database.update_rating(discogs_id, rating)
-
-    # Update the message keyboard to show the chosen rating
     await query.edit_message_reply_markup(reply_markup=rated_keyboard(rating))
     log.info(f"User rated {discogs_id} → {rating}★")
 
 
 # ---------------------------------------------------------------------------
-# Daily scheduled job
+# Daily scheduled job (uses built-in JobQueue)
 # ---------------------------------------------------------------------------
 
-async def daily_suggestion(app: Application):
+async def daily_suggestion(context: ContextTypes.DEFAULT_TYPE):
     log.info("Running daily suggestion job…")
     suggestion = await asyncio.to_thread(recommender.get_suggestion)
     if suggestion is None:
         log.warning("No suggestion generated today.")
-        await app.bot.send_message(
+        await context.bot.send_message(
             chat_id=config.TELEGRAM_CHAT_ID,
             text="😕 Couldn't find a vinyl suggestion for today. Try /suggest manually.",
         )
@@ -151,7 +149,7 @@ async def daily_suggestion(app: Application):
         suggestion["title"],
         suggestion.get("format", ""),
     )
-    await app.bot.send_message(
+    await context.bot.send_message(
         chat_id=config.TELEGRAM_CHAT_ID,
         text=format_suggestion(suggestion),
         parse_mode=ParseMode.MARKDOWN,
@@ -174,23 +172,14 @@ def main():
     app.add_handler(CommandHandler("history", cmd_history))
     app.add_handler(CallbackQueryHandler(handle_rating))
 
-    scheduler = AsyncIOScheduler()
-    scheduler.add_job(
-        daily_suggestion,
-        trigger="cron",
+    # Use the built-in JobQueue — fully integrated with the bot's async event loop
+    send_time = datetime.time(
         hour=config.DAILY_HOUR,
         minute=config.DAILY_MINUTE,
-        kwargs={"app": app},
+        tzinfo=datetime.timezone.utc,
     )
-
-    async def post_init(application: Application):
-        scheduler.start()
-        log.info(
-            f"Scheduler started – daily suggestion at "
-            f"{config.DAILY_HOUR:02d}:{config.DAILY_MINUTE:02d} local time"
-        )
-
-    app.post_init = post_init
+    app.job_queue.run_daily(daily_suggestion, time=send_time)
+    log.info(f"Daily suggestion scheduled at {config.DAILY_HOUR:02d}:{config.DAILY_MINUTE:02d} UTC")
 
     log.info("Bot starting…")
     app.run_polling(allowed_updates=Update.ALL_TYPES)
