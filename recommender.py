@@ -25,13 +25,19 @@ with exactly these fields:
   "title": "Album Title",
   "year": 1973,
   "format": "Vinyl",
+  "genre": "Reggae",
   "why": "Two or three sentences explaining why this fits their taste."
 }
 
 The "format" field must be either "Vinyl" or "Cassette".
+The "genre" field must be one broad genre from the user's profile (e.g. "Electronic", "Reggae", "Jazz").
 
 Rules:
 - Suggest a real, existing album available on Discogs as vinyl or cassette.
+- GENRE DIVERSITY: The user's collection spans many genres. You MUST rotate across them.
+  Look at the percentage breakdown — if Electronic is 40% it should get ~40% of suggestions,
+  not 100%. Actively explore the user's other genres (Reggae, Jazz, Ambient, Rock, etc.).
+- Do NOT always default to the numerically largest genre.
 - Vary your suggestions: don't always pick the most obvious classics.
 - Consider deep cuts, cult favourites, limited pressings, and international releases.
 - The suggestion must NOT be one of the records already in their collection or wantlist.
@@ -39,7 +45,7 @@ Rules:
 """
 
 
-def _ask_claude(taste_summary: str, already_suggested: list[str], rated: dict, recent_artists: list[str]) -> dict:
+def _ask_claude(taste_summary: str, already_suggested: list[str], rated: dict, recent_artists: list[str], recent_genres: list[str]) -> dict:
     client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
 
     exclusion = ""
@@ -54,6 +60,14 @@ def _ask_claude(taste_summary: str, already_suggested: list[str], rated: dict, r
             f"- {a}" for a in recent_artists
         )
 
+    genre_context = ""
+    if recent_genres:
+        genre_context = (
+            f"\n\nThe last {len(recent_genres)} suggestions were in these genres: "
+            + ", ".join(recent_genres)
+            + ".\nPlease suggest something from a DIFFERENT genre this time to ensure variety."
+        )
+
     rating_context = ""
     if rated["liked"]:
         rating_context += "\n\nThe user LOVED these suggestions (rated 4-5★) — lean into this taste:\n"
@@ -64,7 +78,7 @@ def _ask_claude(taste_summary: str, already_suggested: list[str], rated: dict, r
 
     user_message = (
         f"Here is the collector's taste profile:\n\n{taste_summary}"
-        f"{rating_context}{exclusion}{artist_exclusion}\n\n"
+        f"{rating_context}{exclusion}{artist_exclusion}{genre_context}\n\n"
         "Please suggest one vinyl or cassette record they would love. Respond only with the JSON."
     )
 
@@ -100,11 +114,12 @@ def get_suggestion(max_attempts: int = 5) -> dict | None:
     already_suggested = [f"{h['artist']} – {h['title']}" for h in history]
     rated = database.get_rated_history()
     recent_artists = database.get_recent_artists(limit=10)
+    recent_genres = database.get_recent_genres(limit=5)
 
     for attempt in range(1, max_attempts + 1):
         print(f"Asking Claude for suggestion (attempt {attempt}/{max_attempts})…")
         try:
-            suggestion = _ask_claude(taste_summary, already_suggested, rated, recent_artists)
+            suggestion = _ask_claude(taste_summary, already_suggested, rated, recent_artists, recent_genres)
         except (json.JSONDecodeError, KeyError, IndexError) as e:
             print(f"  Claude response parse error: {e}")
             continue
@@ -114,6 +129,7 @@ def get_suggestion(max_attempts: int = 5) -> dict | None:
         why = suggestion.get("why", "")
         year = suggestion.get("year")
         fmt = suggestion.get("format", "Vinyl")
+        genre = suggestion.get("genre", "")
 
         print(f"  Claude suggests: {artist} – {title} ({year}) [{fmt}]")
 
@@ -154,6 +170,7 @@ def get_suggestion(max_attempts: int = 5) -> dict | None:
             "title": title,
             "year": year,
             "format": result.get("format", fmt),
+            "genre": genre,
             "why": why,
             "discogs_url": result["url"],
             "discogs_id": result["id"],

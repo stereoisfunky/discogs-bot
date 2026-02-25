@@ -88,6 +88,7 @@ async def cmd_suggest(update: Update, context: ContextTypes.DEFAULT_TYPE):
         suggestion["artist"],
         suggestion["title"],
         suggestion.get("format", ""),
+        suggestion.get("genre", ""),
     )
     await msg.edit_text(
         format_suggestion(suggestion),
@@ -148,6 +149,7 @@ async def daily_suggestion(context: ContextTypes.DEFAULT_TYPE):
         suggestion["artist"],
         suggestion["title"],
         suggestion.get("format", ""),
+        suggestion.get("genre", ""),
     )
     await context.bot.send_message(
         chat_id=config.TELEGRAM_CHAT_ID,

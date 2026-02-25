@@ -25,7 +25,7 @@ def init_db():
             ON suggestions (discogs_id)
         """)
         # Migrate: add columns if upgrading from older schema
-        for col, definition in [("format", "TEXT"), ("rating", "INTEGER")]:
+        for col, definition in [("format", "TEXT"), ("rating", "INTEGER"), ("genre", "TEXT")]:
             try:
                 conn.execute(f"ALTER TABLE suggestions ADD COLUMN {col} {definition}")
             except Exception:
@@ -41,13 +41,13 @@ def already_sent(discogs_id: str) -> bool:
     return row is not None
 
 
-def record_suggestion(discogs_id: str, artist: str, title: str, fmt: str = ""):
+def record_suggestion(discogs_id: str, artist: str, title: str, fmt: str = "", genre: str = ""):
     with _connect() as conn:
         conn.execute(
             """INSERT OR IGNORE INTO suggestions
-               (discogs_id, artist, title, format, sent_at)
-               VALUES (?, ?, ?, ?, ?)""",
-            (discogs_id, artist, title, fmt, datetime.utcnow().isoformat()),
+               (discogs_id, artist, title, format, genre, sent_at)
+               VALUES (?, ?, ?, ?, ?, ?)""",
+            (discogs_id, artist, title, fmt, genre, datetime.utcnow().isoformat()),
         )
         conn.commit()
 
@@ -73,6 +73,16 @@ def get_history(limit: int = 20) -> list[dict]:
          "format": r[3], "rating": r[4], "sent_at": r[5]}
         for r in rows
     ]
+
+
+def get_recent_genres(limit: int = 5) -> list[str]:
+    """Return genres from the last N suggestions (for rotation)."""
+    with _connect() as conn:
+        rows = conn.execute(
+            "SELECT genre FROM suggestions WHERE genre IS NOT NULL AND genre != '' ORDER BY sent_at DESC LIMIT ?",
+            (limit,),
+        ).fetchall()
+    return [r[0] for r in rows]
 
 
 def get_recent_artists(limit: int = 10) -> list[str]:

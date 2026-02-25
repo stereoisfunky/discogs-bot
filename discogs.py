@@ -168,15 +168,28 @@ def build_taste_profile(collection: list[dict], wantlist: list[dict]) -> dict:
 
 
 def format_profile_for_prompt(profile: dict) -> str:
+    total = profile["total_collection"] + profile["total_wantlist"]
+
+    def pct(n):
+        return f"{n / total * 100:.1f}%" if total > 0 else "?"
+
     lines = [
-        f"Collection size: {profile['total_collection']} records",
-        f"Wantlist size:   {profile['total_wantlist']} records",
+        f"Collection: {profile['total_collection']} records | Wantlist: {profile['total_wantlist']} records",
         "",
-        "Top genres:    " + ", ".join(f"{g} ({n})" for g, n in profile["top_genres"]),
-        "Top styles:    " + ", ".join(f"{s} ({n})" for s, n in profile["top_styles"]),
-        "Top decades:   " + ", ".join(f"{d} ({n})" for d, n in profile["top_decades"]),
-        "Fav artists:   " + ", ".join(a for a, _ in profile["top_artists"][:12]),
-        "Fav labels:    " + ", ".join(l for l, _ in profile["top_labels"][:8]),
+        "Genre breakdown (percentage of total collection):",
+    ]
+    for g, n in profile["top_genres"]:
+        lines.append(f"  {g}: {pct(n)}  ({n} records)")
+
+    lines += ["", "Style breakdown:"]
+    for s, n in profile["top_styles"]:
+        lines.append(f"  {s}: {pct(n)}  ({n} records)")
+
+    lines += [
+        "",
+        "Decades:  " + ", ".join(f"{d} ({n})" for d, n in profile["top_decades"]),
+        "Artists:  " + ", ".join(a for a, _ in profile["top_artists"][:12]),
+        "Labels:   " + ", ".join(l for l, _ in profile["top_labels"][:8]),
     ]
     return "\n".join(lines)
 

@@ -36,14 +36,21 @@ The bot fetches your full Discogs collection and wantlist, then counts occurrenc
 - **Labels**
 - **Decades** (derived from release year)
 
-This produces a ranked summary like:
+Counts are converted to **percentages of your total collection** so Claude understands the real proportional balance — not just raw numbers that would over-emphasise the largest genre:
 
 ```
-Top genres:   Electronic (312), Jazz (88), Funk / Soul (41)
-Top styles:   Ambient (140), Dub Techno (95), Experimental (60)
-Top decades:  1990s (280), 2000s (310), 1970s (90)
-Fav artists:  Basic Channel, Gas, Jan Jelinek, Burial...
-Fav labels:   Chain Reaction, Kompakt, Warp...
+Genre breakdown (percentage of total collection):
+  Electronic: 42.3%  (512 records)
+  Reggae:     12.1%  (146 records)
+  Jazz:        7.4%  (89 records)
+  Rock:        6.8%  (82 records)
+  ...
+
+Style breakdown:
+  Dub Techno:    18.2%  (220 records)
+  Roots Reggae:  10.4%  (126 records)
+  Ambient:        9.7%  (117 records)
+  ...
 ```
 
 ---
@@ -53,19 +60,21 @@ Fav labels:   Chain Reaction, Kompakt, Warp...
 The taste profile is sent to **Claude (claude-opus-4-6)** with a prompt that instructs it to:
 
 - Suggest one real vinyl or cassette release (no CDs, no digital)
-- Match the user's taste profile
+- **Rotate across genres proportionally** — if Reggae is 12% of your collection, roughly 1 in 8 suggestions should be Reggae, not just Electronic every time
 - Avoid anything already in the collection, wantlist, or previously suggested
 - Avoid artists suggested in the last 10 picks (artist cooldown)
+- Avoid genres suggested in the last 5 picks (genre rotation)
 - Factor in user ratings: lean toward liked records (4–5★), steer away from disliked ones (1–2★)
 
-Claude responds with a structured JSON:
+Claude responds with a structured JSON that includes the broad genre:
 ```json
 {
-  "artist": "Cluster",
-  "title": "Zuckerzeit",
-  "year": 1974,
+  "artist": "The Congos",
+  "title": "Heart of the Congos",
+  "year": 1977,
   "format": "Vinyl",
-  "why": "A landmark of kosmische musik that bridges your love of ambient electronics and experimental minimalism."
+  "genre": "Reggae",
+  "why": "A roots reggae cornerstone that matches your taste for dub and spiritual sounds."
 }
 ```
 
@@ -81,6 +90,7 @@ Before accepting a suggestion, the bot runs several checks:
 | Already owned (repress/reissue) | Normalises artist + title, strips parentheticals like *(Remastered)*, ignores leading *"The"*, strips punctuation — then compares |
 | Already suggested | Checks `suggestions.db` for the release ID |
 | Artist cooldown | The same artist cannot appear in two of the last 10 suggestions |
+| Genre rotation | If the last 5 suggestions were all in the same genre, Claude is told to pick a different one |
 
 If any check fails, the bot tells Claude and retries (up to 5 attempts).
 
