@@ -301,11 +301,21 @@ def get_owned_titles(collection: list[dict], wantlist: list[dict]) -> set[tuple[
     """
     Return a set of normalized (artist, title) pairs for every owned release,
     so any repress or reissue of the same album can be detected and excluded.
+
+    For multi-artist releases (e.g. Discogs stores ["Cluster", "Eno"] separately),
+    we store both the first artist alone AND all artists joined, so that a Claude
+    suggestion like "Cluster & Eno" still matches correctly.
     """
     owned = set()
     for item in collection + wantlist:
         artists = item.get("artists", [])
         title = item.get("title", "")
-        if artists and title:
-            owned.add((normalize(artists[0]), normalize(title)))
+        if not artists or not title:
+            continue
+        norm_title = normalize(title)
+        # First artist alone
+        owned.add((normalize(artists[0]), norm_title))
+        # All artists joined — catches "Cluster & Eno" style suggestions
+        if len(artists) > 1:
+            owned.add((normalize(" ".join(artists)), norm_title))
     return owned
