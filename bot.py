@@ -38,8 +38,7 @@ def format_suggestion(s: dict) -> str:
     rarity_label = s.get("rarity_label", "")
 
     return (
-        f"{fmt_emoji} *Today's {s.get('format', 'Vinyl')} pick*\n\n"
-        f"*{s['artist']}* – _{s['title']}{year_str}_\n\n"
+        f"{fmt_emoji} *{s['artist']}* – _{s['title']}{year_str}_\n\n"
         f"{s['why']}\n\n"
         f"*Rarity:* {rarity_bar} {rarity_label}\n"
         f"_{have} collectors own it · {want} want it_\n\n"

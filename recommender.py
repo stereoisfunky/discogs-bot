@@ -26,11 +26,13 @@ with exactly these fields:
   "year": 1973,
   "format": "Vinyl",
   "genre": "Reggae",
-  "why": "Two or three sentences explaining why this fits their taste."
+  "info": "Label: Trojan Records. One concise sentence of factual context about the release."
 }
 
 The "format" field must be either "Vinyl" or "Cassette".
 The "genre" field must be one broad genre from the user's profile (e.g. "Electronic", "Reggae", "Jazz").
+The "info" field must be SHORT and FACTUAL — label, key collaborators, or one notable fact about the release.
+Do NOT explain why it fits the collector's taste. No references to their collection. Just the record itself.
 
 Rules:
 - Suggest a real, existing album available on Discogs as vinyl or cassette.
@@ -126,7 +128,7 @@ def get_suggestion(max_attempts: int = 5) -> dict | None:
 
         artist = suggestion.get("artist", "")
         title = suggestion.get("title", "")
-        why = suggestion.get("why", "")
+        why = suggestion.get("info", "")
         year = suggestion.get("year")
         fmt = suggestion.get("format", "Vinyl")
         genre = suggestion.get("genre", "")
