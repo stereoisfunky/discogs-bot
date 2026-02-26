@@ -183,6 +183,14 @@ def main():
     app.job_queue.run_daily(daily_suggestion, time=send_time)
     log.info(f"Daily suggestion scheduled at {config.DAILY_HOUR:02d}:{config.DAILY_MINUTE:02d} UTC")
 
+    # Catch-up: if the Mac was asleep at scheduled time, send on startup
+    async def post_init(application: Application):
+        if not database.suggestion_sent_today():
+            log.info("No suggestion sent today yet — sending catch-up suggestion…")
+            await daily_suggestion(type("ctx", (), {"bot": application.bot})())
+
+    app.post_init = post_init
+
     log.info("Bot starting…")
     app.run_polling(allowed_updates=Update.ALL_TYPES)
 

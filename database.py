@@ -75,6 +75,17 @@ def get_history(limit: int = 20) -> list[dict]:
     ]
 
 
+def suggestion_sent_today() -> bool:
+    """Return True if a suggestion was already recorded today (UTC date)."""
+    today = datetime.utcnow().strftime("%Y-%m-%d")
+    with _connect() as conn:
+        row = conn.execute(
+            "SELECT 1 FROM suggestions WHERE sent_at LIKE ? LIMIT 1",
+            (f"{today}%",),
+        ).fetchone()
+    return row is not None
+
+
 def get_recent_genres(limit: int = 5) -> list[str]:
     """Return genres from the last N suggestions (for rotation)."""
     with _connect() as conn:
