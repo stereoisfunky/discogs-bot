@@ -133,6 +133,16 @@ async def handle_rating(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # Daily scheduled job (uses built-in JobQueue)
 # ---------------------------------------------------------------------------
 
+async def catchup_check(context: ContextTypes.DEFAULT_TYPE):
+    """Runs every 15 min. If the scheduled time has passed and no suggestion was
+    sent today (e.g. Mac was asleep), send it now."""
+    now = datetime.datetime.now(datetime.timezone.utc)
+    scheduled = now.replace(hour=config.DAILY_HOUR, minute=config.DAILY_MINUTE, second=0, microsecond=0)
+    if now >= scheduled and not database.suggestion_sent_today():
+        log.info("Catch-up check: missed today's suggestion — sending now…")
+        await daily_suggestion(context)
+
+
 async def daily_suggestion(context: ContextTypes.DEFAULT_TYPE):
     log.info("Running daily suggestion job…")
     suggestion = await asyncio.to_thread(recommender.get_suggestion)
@@ -181,6 +191,10 @@ def main():
     )
     app.job_queue.run_daily(daily_suggestion, time=send_time)
     log.info(f"Daily suggestion scheduled at {config.DAILY_HOUR:02d}:{config.DAILY_MINUTE:02d} UTC")
+
+    # Watchdog: every 15 min, catch missed suggestions (e.g. Mac was asleep at scheduled time)
+    app.job_queue.run_repeating(catchup_check, interval=900, first=60)
+    log.info("Catch-up watchdog scheduled every 15 minutes")
 
     # Catch-up: if the Mac was asleep at scheduled time, send on startup
     async def post_init(application: Application):
