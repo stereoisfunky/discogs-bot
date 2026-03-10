@@ -47,7 +47,7 @@ Rules:
 """
 
 
-def _ask_claude(taste_summary: str, already_suggested: list[str], rated: dict, recent_artists: list[str], recent_genres: list[str]) -> dict:
+def _ask_claude(taste_summary: str, already_suggested: list[str], rated: dict, recent_artists: list[str], recent_genres: list[str], owned_titles: set[tuple[str, str]] | None = None) -> dict:
     client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
 
     exclusion = ""
@@ -70,6 +70,11 @@ def _ask_claude(taste_summary: str, already_suggested: list[str], rated: dict, r
             + ".\nPlease suggest something from a DIFFERENT genre this time to ensure variety."
         )
 
+    owned_exclusion = ""
+    if owned_titles:
+        owned_lines = sorted(f"- {artist} – {title}" for artist, title in owned_titles)
+        owned_exclusion = "\n\nThe user already owns or has wishlisted ALL of these records — do NOT suggest any of them:\n" + "\n".join(owned_lines)
+
     rating_context = ""
     if rated["liked"]:
         rating_context += "\n\nThe user LOVED these suggestions (rated 4-5★) — lean into this taste:\n"
@@ -80,7 +85,7 @@ def _ask_claude(taste_summary: str, already_suggested: list[str], rated: dict, r
 
     user_message = (
         f"Here is the collector's taste profile:\n\n{taste_summary}"
-        f"{rating_context}{exclusion}{artist_exclusion}{genre_context}\n\n"
+        f"{rating_context}{owned_exclusion}{exclusion}{artist_exclusion}{genre_context}\n\n"
         "Please suggest one vinyl or cassette record they would love. Respond only with the JSON."
     )
 
@@ -121,7 +126,7 @@ def get_suggestion(max_attempts: int = 5) -> dict | None:
     for attempt in range(1, max_attempts + 1):
         print(f"Asking Claude for suggestion (attempt {attempt}/{max_attempts})…")
         try:
-            suggestion = _ask_claude(taste_summary, already_suggested, rated, recent_artists, recent_genres)
+            suggestion = _ask_claude(taste_summary, already_suggested, rated, recent_artists, recent_genres, owned_titles)
         except (json.JSONDecodeError, KeyError, IndexError) as e:
             print(f"  Claude response parse error: {e}")
             continue
