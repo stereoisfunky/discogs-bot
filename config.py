@@ -1,7 +1,7 @@
 import os
 from dotenv import load_dotenv
 
-load_dotenv()
+load_dotenv(os.path.join(os.path.dirname(__file__), ".env"))
 
 DISCOGS_TOKEN = os.getenv("DISCOGS_TOKEN")
 DISCOGS_USERNAME = os.getenv("DISCOGS_USERNAME")
@@ -16,6 +16,7 @@ DAILY_MINUTE = int(os.getenv("DAILY_MINUTE", 0))
 
 DB_PATH = os.path.join(os.path.dirname(__file__), "suggestions.db")
 CACHE_PATH = os.path.join(os.path.dirname(__file__), "discogs_cache.json")
+LOG_PATH = os.path.join(os.path.dirname(__file__), "bot.log")
 CACHE_TTL_HOURS = 168  # 1 week
 
 def validate():

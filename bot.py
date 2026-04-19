@@ -9,6 +9,7 @@ Commands:
 import asyncio
 import datetime
 import logging
+from logging.handlers import RotatingFileHandler
 
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, CallbackQueryHandler, ContextTypes
@@ -18,9 +19,16 @@ import config
 import database
 import recommender
 
+_handler = RotatingFileHandler(
+    config.LOG_PATH,
+    maxBytes=500_000,
+    backupCount=2,
+    encoding="utf-8",
+)
 logging.basicConfig(
     format="%(asctime)s [%(levelname)s] %(name)s – %(message)s",
     level=logging.INFO,
+    handlers=[_handler, logging.StreamHandler()],
 )
 log = logging.getLogger(__name__)
 
