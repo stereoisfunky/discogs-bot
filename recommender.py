@@ -222,90 +222,113 @@ def _ask_claude(taste_summary: str, mode: str, anchors: list[str],
     return parsed
 
 
-def get_suggestion(max_attempts: int = 5) -> dict | None:
-    """
-    Build a taste profile, ask Claude for a vinyl/cassette suggestion,
-    find it on Discogs, fetch rarity stats.
-    Returns a dict or None if all attempts fail.
-    """
+def get_suggestion(max_rounds: int = 2) -> dict | None:
+    """Build a profile, ask Claude for candidates, score, resolve, pick a pressing."""
+    import config
+
     print("Loading Discogs collection and wantlist…")
     collection, wantlist = discogs.fetch_collection_and_wantlist()
     print(f"  {len(collection)} collection + {len(wantlist)} wantlist items")
 
-    profile = discogs.build_taste_profile(collection, wantlist)
+    seed = _random.randrange(1_000_000)
+    rng = _random.Random(seed)
+    mode = pick_mode(config.MODE_WEIGHTS, rng)
+    print(f"  Mode: {mode} (seed {seed})")
+
+    profile = discogs.build_taste_profile(collection, wantlist, seed=seed)
     taste_summary = discogs.format_profile_for_prompt(profile)
     owned_ids = discogs.get_owned_ids(collection, wantlist)
     owned_titles = discogs.get_owned_titles(collection, wantlist)
 
+    anchors = [
+        f"{' & '.join(r.get('artists', []))} – {r.get('title', '')}"
+        for r in discogs.pick_anchors(collection, config.ANCHOR_COUNT, seed=seed)
+    ]
+
     history = database.get_history(limit=50)
     already_suggested = [f"{h['artist']} – {h['title']}" for h in history]
-    rated = database.get_rated_history()
     recent_artists = database.get_recent_artists(limit=10)
-    recent_genres = database.get_recent_genres(limit=5)
+    recent_genres = database.get_recent_genres(limit=10)
+    recent_styles = database.get_recent_styles(limit=10)
+    rated_attrs = database.get_rated_attributes()
 
-    for attempt in range(1, max_attempts + 1):
-        print(f"Asking Claude for suggestion (attempt {attempt}/{max_attempts})…")
+    rejected_feedback = ""
+
+    for rnd in range(1, max_rounds + 1):
+        print(f"Asking Claude for candidates (round {rnd}/{max_rounds})…")
         try:
-            suggestion = _ask_claude(taste_summary, already_suggested, rated, recent_artists, recent_genres, owned_titles)
-        except (json.JSONDecodeError, KeyError, IndexError) as e:
+            candidates = _ask_claude(taste_summary, mode, anchors, already_suggested,
+                                     recent_artists, rated_attrs, feedback=rejected_feedback)
+        except (json.JSONDecodeError, KeyError, IndexError, ValueError, TypeError) as e:
             print(f"  Claude response parse error: {e}")
             continue
 
-        artist = suggestion.get("artist", "")
-        title = suggestion.get("title", "")
-        why = suggestion.get("info", "")
-        year = suggestion.get("year")
-        fmt = suggestion.get("format", "Vinyl")
-        genre = suggestion.get("genre", "")
+        # Hard filters
+        viable = []
+        for c in candidates:
+            artist = c.get("artist", "")
+            title = c.get("title", "")
+            if not artist or not title:
+                continue
+            if artist in recent_artists:
+                continue
+            if (discogs.normalize(artist), discogs.normalize(title)) in owned_titles:
+                continue
+            if f"{artist} – {title}" in already_suggested:
+                continue
+            viable.append(c)
 
-        print(f"  Claude suggests: {artist} – {title} ({year}) [{fmt}]")
+        # Resolve + score
+        scored = []
+        for c in viable:
+            pressings = discogs.search_release(c["artist"], c["title"])
+            if not pressings:
+                continue
+            if pressings[0]["id"] in owned_ids or database.already_sent(pressings[0]["id"]):
+                continue
+            head_info = discogs.get_release_info(pressings[0]["id"])
+            score = score_candidate(c, head_info, recent_genres, recent_styles,
+                                    profile, mode, config.SCORE_WEIGHTS,
+                                    discoverable_range=tuple(config.DISCOVERABLE_HAVE_RANGE))
+            scored.append((score, c, pressings, head_info))
 
-        if artist in recent_artists:
-            print(f"  Artist '{artist}' was suggested recently, retrying…")
-            already_suggested.append(f"{artist} – {title}")
-            continue
+        scored.sort(key=lambda t: t[0], reverse=True)
 
-        # Reject if any version of this album is already owned
-        if (discogs.normalize(artist), discogs.normalize(title)) in owned_titles:
-            print(f"  User already owns a version of '{artist} – {title}', retrying…")
-            already_suggested.append(f"{artist} – {title}")
-            continue
+        for score, c, pressings, head_info in scored:
+            def fetch_info(rid, _head=(pressings[0]["id"], head_info)):
+                return _head[1] if rid == _head[0] else discogs.get_release_info(rid)
 
-        result = discogs.search_release(artist, title)
-        if result is None:
-            print("  Not found on Discogs as vinyl/cassette, retrying…")
-            already_suggested.append(f"{artist} – {title}")
-            continue
+            chosen = choose_pressing(pressings, c.get("pressing_note", "any"),
+                                     fetch_info, config.ABSURD_PRICE)
+            if chosen is None:
+                continue
+            if chosen["id"] in owned_ids or database.already_sent(chosen["id"]):
+                continue
 
-        if database.already_sent(result["id"]):
-            print("  Already sent this one, retrying…")
-            already_suggested.append(f"{artist} – {title}")
-            continue
+            print(f"  Pick: {c['artist']} – {c['title']} "
+                  f"[{chosen['format']}] {config.PRICE_CURRENCY_SYMBOL}{chosen['lowest_price']}")
+            return {
+                "artist": c["artist"],
+                "title": c["title"],
+                "year": chosen.get("year") or c.get("year"),
+                "format": chosen.get("format", c.get("format", "Vinyl")),
+                "genre": c.get("genre", ""),
+                "style": c.get("style", ""),
+                "mode": mode,
+                "why": c.get("reason", ""),
+                "discogs_url": chosen["url"],
+                "discogs_id": chosen["id"],
+                "have": chosen["have"],
+                "want": chosen["want"],
+                "lowest_price": chosen["lowest_price"],
+                "num_for_sale": chosen["num_for_sale"],
+                "reissue_fallback": chosen["reissue_fallback"],
+                "original_price": chosen["original_price"],
+            }
 
-        if result["id"] in owned_ids:
-            print("  Already in collection/wantlist, retrying…")
-            already_suggested.append(f"{artist} – {title}")
-            continue
+        rejected_feedback = ("\n\nThe previous candidates were all rejected (owned, "
+                             "already suggested, unavailable, or too expensive). "
+                             "Propose 5 completely different ones.")
 
-        # Fetch rarity
-        print(f"  Fetching community stats for release {result['id']}…")
-        stats = discogs.get_community_stats(result["id"])
-        rarity_bar, rarity_label = discogs.calculate_rarity(stats["have"], stats["want"])
-
-        return {
-            "artist": artist,
-            "title": title,
-            "year": year,
-            "format": result.get("format", fmt),
-            "genre": genre,
-            "why": why,
-            "discogs_url": result["url"],
-            "discogs_id": result["id"],
-            "have": stats["have"],
-            "want": stats["want"],
-            "rarity_bar": rarity_bar,
-            "rarity_label": rarity_label,
-        }
-
-    print("Could not find a valid suggestion after all attempts.")
+    print("Could not find a valid suggestion after all rounds.")
     return None

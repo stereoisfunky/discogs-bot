@@ -107,3 +107,45 @@ def test_choose_pressing_returns_none_when_all_absurd():
 
 def test_choose_pressing_empty_list_returns_none():
     assert recommender.choose_pressing([], "any", lambda x: {}, absurd_price=80.0) is None
+
+
+import discogs as _discogs
+import database as _database
+
+
+def test_get_suggestion_end_to_end(monkeypatch, temp_db, sample_collection, sample_wantlist):
+    monkeypatch.setattr(_discogs, "fetch_collection_and_wantlist",
+                        lambda: (sample_collection, sample_wantlist))
+
+    candidates = [
+        {"artist": "Sun Ra", "title": "Lanquidity", "year": 1978, "format": "Vinyl",
+         "genre": "Jazz", "style": "Free Jazz", "pressing_note": "any",
+         "est_price_band": "mid", "reason": "Cosmic jazz on Philly Jazz."},
+        {"artist": "Pole", "title": "1", "year": 1998, "format": "Vinyl",
+         "genre": "Electronic", "style": "Dub Techno", "pressing_note": "any",
+         "est_price_band": "mid", "reason": "Glitch dub on Kiff SM."},
+    ]
+    monkeypatch.setattr(recommender, "_ask_claude",
+                        lambda *a, **k: candidates)
+
+    monkeypatch.setattr(_discogs, "search_release",
+                        lambda artist, title: [
+                            {"id": f"{artist}-og", "year": "1978", "format": "Vinyl",
+                             "url": "u1"},
+                            {"id": f"{artist}-re", "year": "2010", "format": "Vinyl",
+                             "url": "u2"},
+                        ])
+
+    def fake_info(rid):
+        return {"have": 1200, "want": 300, "lowest_price": 20.0, "num_for_sale": 5}
+    monkeypatch.setattr(_discogs, "get_release_info", fake_info)
+
+    _RealRandom = random.Random
+    monkeypatch.setattr(recommender._random, "Random", lambda *a, **k: _RealRandom(0))
+
+    out = recommender.get_suggestion()
+    assert out is not None
+    assert out["artist"] in ("Sun Ra", "Pole")
+    assert out["lowest_price"] == 20.0
+    assert "mode" in out
+    assert out["discogs_url"] in ("u1", "u2")
