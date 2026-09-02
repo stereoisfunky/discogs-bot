@@ -11,6 +11,112 @@ import discogs
 import database
 
 
+import random as _random
+
+
+def pick_mode(weights: dict, rng: _random.Random) -> str:
+    modes = list(weights.keys())
+    return rng.choices(modes, weights=[weights[m] for m in modes], k=1)[0]
+
+
+def score_candidate(candidate: dict, info: dict, recent_genres: list[str],
+                    recent_styles: list[str], profile: dict, mode: str,
+                    weights: dict, discoverable_range=(200, 3000)) -> float:
+    genre = candidate.get("genre", "")
+    style = candidate.get("style", "")
+
+    novelty = 0.0
+    if genre and genre not in recent_genres:
+        novelty += 0.5
+    if style and style not in recent_styles:
+        novelty += 0.5
+
+    top_genres = {g for g, _ in profile.get("top_genres", [])}
+    top_styles = {s for s, _ in profile.get("top_styles", [])}
+    g_in, s_in = genre in top_genres, style in top_styles
+    if mode == "core":
+        fit = 1.0 if (g_in and s_in) else 0.0
+    elif mode == "adjacent":
+        fit = 1.0 if (g_in and not s_in) else 0.0
+    else:  # wildcard
+        fit = 1.0 if not g_in else 0.0
+
+    have = info.get("have") or 0
+    lo, hi = discoverable_range
+    disc = 1.0 if lo <= have <= hi else 0.0
+
+    price_pen = 1.0 if candidate.get("est_price_band") == "collector" else 0.0
+
+    return (weights["novelty"] * novelty
+            + weights["mode_fit"] * fit
+            + weights["discoverable"] * disc
+            - weights["price_band"] * price_pen)
+
+
+def _pressing_result(pressing: dict, info: dict, reissue_fallback: bool,
+                     original_price) -> dict:
+    return {
+        "id": pressing["id"],
+        "year": pressing.get("year"),
+        "url": pressing["url"],
+        "format": pressing.get("format", "Vinyl"),
+        "lowest_price": info.get("lowest_price"),
+        "num_for_sale": info.get("num_for_sale", 0),
+        "have": info.get("have", 0),
+        "want": info.get("want", 0),
+        "reissue_fallback": reissue_fallback,
+        "original_price": original_price,
+    }
+
+
+def choose_pressing(pressings: list[dict], pressing_note: str, fetch_info,
+                    absurd_price: float) -> dict | None:
+    """Pick the pressing to point at. `fetch_info` maps release_id -> info dict
+    (have/want/lowest_price/num_for_sale). Returns None if nothing affordable."""
+    if not pressings:
+        return None
+
+    cache: dict = {}
+
+    def info_for(p):
+        if p["id"] not in cache:
+            cache[p["id"]] = fetch_info(p["id"])
+        return cache[p["id"]]
+
+    def affordable(info):
+        pr = info.get("lowest_price")
+        return pr is not None and pr <= absurd_price and (info.get("num_for_sale", 0) or 0) > 0
+
+    if pressing_note == "original":
+        oldest = pressings[0]
+        oi = info_for(oldest)
+        if affordable(oi):
+            return _pressing_result(oldest, oi, False, None)
+        original_price = oi.get("lowest_price")
+        best, best_info = None, None
+        for p in pressings[1:4]:
+            pi = info_for(p)
+            if not affordable(pi):
+                continue
+            if best is None or pi["lowest_price"] < best_info["lowest_price"]:
+                best, best_info = p, pi
+        if best is not None:
+            return _pressing_result(best, best_info, True, original_price)
+        return None
+
+    # "any"
+    best, best_info = None, None
+    for p in pressings[:4]:
+        pi = info_for(p)
+        if not affordable(pi):
+            continue
+        if best is None or pi["lowest_price"] < best_info["lowest_price"]:
+            best, best_info = p, pi
+    if best is not None:
+        return _pressing_result(best, best_info, False, None)
+    return None
+
+
 SYSTEM_PROMPT = """You are a passionate vinyl record expert and music curator.
 Your job is to suggest one specific physical music release that a collector would love,
 based on their Discogs taste profile.
