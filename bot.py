@@ -48,7 +48,7 @@ def format_suggestion(s: dict) -> str:
 
     if price is not None:
         sym = config.PRICE_CURRENCY_SYMBOL
-        price_str = f"From {sym}{price:g} · {num} for sale · {have} own / {want} want"
+        price_str = f"From {sym}{price:.2f} · {num} for sale · {have} own / {want} want"
     else:
         price_str = f"Price unavailable · {have} own / {want} want"
 
@@ -56,7 +56,7 @@ def format_suggestion(s: dict) -> str:
     if s.get("reissue_fallback") and s.get("original_price"):
         sym = config.PRICE_CURRENCY_SYMBOL
         fallback_note = (
-            f"\n_(original pressing runs ~{sym}{s['original_price']:g}; "
+            f"\n_(original pressing runs ~{sym}{s['original_price']:.2f}; "
             f"this points to the {s.get('year', 'reissue')} reissue)_"
         )
 
