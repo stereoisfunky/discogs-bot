@@ -25,7 +25,10 @@ def init_db():
             ON suggestions (discogs_id)
         """)
         # Migrate: add columns if upgrading from older schema
-        for col, definition in [("format", "TEXT"), ("rating", "INTEGER"), ("genre", "TEXT")]:
+        for col, definition in [
+            ("format", "TEXT"), ("rating", "INTEGER"), ("genre", "TEXT"),
+            ("style", "TEXT"), ("year", "INTEGER"), ("mode", "TEXT"),
+        ]:
             try:
                 conn.execute(f"ALTER TABLE suggestions ADD COLUMN {col} {definition}")
             except Exception:
@@ -41,13 +44,16 @@ def already_sent(discogs_id: str) -> bool:
     return row is not None
 
 
-def record_suggestion(discogs_id: str, artist: str, title: str, fmt: str = "", genre: str = ""):
+def record_suggestion(discogs_id: str, artist: str, title: str, fmt: str = "",
+                      genre: str = "", style: str = "", year: int | None = None,
+                      mode: str = ""):
     with _connect() as conn:
         conn.execute(
             """INSERT OR IGNORE INTO suggestions
-               (discogs_id, artist, title, format, genre, sent_at)
-               VALUES (?, ?, ?, ?, ?, ?)""",
-            (discogs_id, artist, title, fmt, genre, datetime.utcnow().isoformat()),
+               (discogs_id, artist, title, format, genre, style, year, mode, sent_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (discogs_id, artist, title, fmt, genre, style, year, mode,
+             datetime.utcnow().isoformat()),
         )
         conn.commit()
 
@@ -86,7 +92,7 @@ def suggestion_sent_today() -> bool:
     return row is not None
 
 
-def get_recent_genres(limit: int = 5) -> list[str]:
+def get_recent_genres(limit: int = 10) -> list[str]:
     """Return genres from the last N suggestions (for rotation)."""
     with _connect() as conn:
         rows = conn.execute(
@@ -104,6 +110,48 @@ def get_recent_artists(limit: int = 10) -> list[str]:
             (limit,),
         ).fetchall()
     return [r[0] for r in rows if r[0]]
+
+
+def get_recent_styles(limit: int = 10) -> list[str]:
+    """Return styles from the last N suggestions (for novelty scoring)."""
+    with _connect() as conn:
+        rows = conn.execute(
+            "SELECT style FROM suggestions WHERE style IS NOT NULL AND style != '' "
+            "ORDER BY sent_at DESC LIMIT ?",
+            (limit,),
+        ).fetchall()
+    return [r[0] for r in rows]
+
+
+def _decade(year) -> str | None:
+    try:
+        return f"{(int(year) // 10) * 10 % 100:02d}s" if year else None
+    except (ValueError, TypeError):
+        return None
+
+
+def get_rated_attributes() -> dict:
+    """Aggregate genre/style/decade of liked (4-5) vs disliked (1-2) picks."""
+    with _connect() as conn:
+        rows = conn.execute(
+            "SELECT genre, style, year, rating FROM suggestions WHERE rating IS NOT NULL"
+        ).fetchall()
+    out = {
+        "liked": {"genres": [], "styles": [], "decades": []},
+        "disliked": {"genres": [], "styles": [], "decades": []},
+    }
+    for genre, style, year, rating in rows:
+        bucket = "liked" if rating >= 4 else "disliked" if rating <= 2 else None
+        if not bucket:
+            continue
+        if genre and genre not in out[bucket]["genres"]:
+            out[bucket]["genres"].append(genre)
+        if style and style not in out[bucket]["styles"]:
+            out[bucket]["styles"].append(style)
+        dec = _decade(year)
+        if dec and dec not in out[bucket]["decades"]:
+            out[bucket]["decades"].append(dec)
+    return out
 
 
 def get_rated_history() -> dict[str, list[str]]:
