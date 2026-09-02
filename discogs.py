@@ -292,17 +292,13 @@ def _artist_matches(suggested_artist: str, result_title: str) -> bool:
     return norm_suggested in norm_result or norm_result in norm_suggested
 
 
-def search_release(artist: str, title: str) -> dict | None:
+def search_release(artist: str, title: str) -> list[dict]:
     """
-    Search Discogs for a specific release, accepting only Vinyl or Cassette.
-    Uses a free-text query for reliability, validates artist match, and
-    returns the oldest matching pressing.
+    Search Discogs for a release, accepting only Vinyl or Cassette.
+    Returns every matching pressing sorted oldest-first (undated last);
+    empty list if nothing matches.
     """
-    params = {
-        "q": f"{artist} {title}",
-        "type": "release",
-        "per_page": 25,
-    }
+    params = {"q": f"{artist} {title}", "type": "release", "per_page": 25}
     data = _get(f"{BASE_URL}/database/search", params=params)
 
     candidates = []
@@ -310,51 +306,53 @@ def search_release(artist: str, title: str) -> dict | None:
         release_id = str(r.get("id", ""))
         if not release_id:
             continue
-
-        # Validate that the result's artist actually matches the suggested artist
         result_title = r.get("title", "")
         if not _artist_matches(artist, result_title):
             continue
 
         formats = r.get("formats") or []
-        format_names = {f.get("name", "") for f in formats} if isinstance(formats[0], dict) else set(formats)
-        matched_fmt = None
-        if "Vinyl" in format_names:
-            matched_fmt = "Vinyl"
-        elif "Cassette" in format_names:
-            matched_fmt = "Cassette"
-        if matched_fmt:
-            candidates.append({
-                "id": release_id,
-                "title": result_title,
-                "url": f"https://www.discogs.com/release/{release_id}",
-                "year": r.get("year"),
-                "format": matched_fmt,
-            })
+        if not formats:
+            continue
+        format_names = (
+            {f.get("name", "") for f in formats}
+            if isinstance(formats[0], dict) else set(formats)
+        )
+        matched_fmt = "Vinyl" if "Vinyl" in format_names else (
+            "Cassette" if "Cassette" in format_names else None)
+        if not matched_fmt:
+            continue
 
-    if not candidates:
-        return None
+        candidates.append({
+            "id": release_id,
+            "title": result_title,
+            "url": f"https://www.discogs.com/release/{release_id}",
+            "year": r.get("year"),
+            "format": matched_fmt,
+        })
 
-    # Prefer the oldest pressing; entries without a year go last
     candidates.sort(key=lambda r: (r["year"] is None, int(r["year"]) if r["year"] else 9999))
-    return candidates[0]
+    return candidates
 
 
 # ---------------------------------------------------------------------------
 # Community stats for rarity
 # ---------------------------------------------------------------------------
 
-def get_community_stats(release_id: str) -> dict:
-    """Fetch have/want counts for a release."""
+def get_release_info(release_id: str) -> dict:
+    """Fetch have/want, cheapest listing price, and stock for one release."""
+    from config import PRICE_CURRENCY_CODE
     try:
-        data = _get(f"{BASE_URL}/releases/{release_id}")
-        community = data.get("community", {})
+        data = _get(f"{BASE_URL}/releases/{release_id}",
+                    params={"curr_abbr": PRICE_CURRENCY_CODE})
+        community = data.get("community", {}) or {}
         return {
-            "have": community.get("have", 0),
-            "want": community.get("want", 0),
+            "have": community.get("have", 0) or 0,
+            "want": community.get("want", 0) or 0,
+            "lowest_price": data.get("lowest_price"),
+            "num_for_sale": data.get("num_for_sale", 0) or 0,
         }
     except Exception:
-        return {"have": 0, "want": 0}
+        return {"have": 0, "want": 0, "lowest_price": None, "num_for_sale": 0}
 
 
 def calculate_rarity(have: int, want: int) -> tuple[str, str]:
