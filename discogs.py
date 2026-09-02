@@ -339,17 +339,28 @@ def search_release(artist: str, title: str) -> list[dict]:
 # ---------------------------------------------------------------------------
 
 def get_release_info(release_id: str) -> dict:
-    """Fetch have/want, cheapest listing price, and stock for one release."""
+    """Fetch have/want, cheapest listing price, and stock for one release.
+
+    have/want come from GET /releases/{id} .community.
+    lowest_price / num_for_sale come from GET /marketplace/stats/{id}, whose
+    lowest_price field is a nested {"value", "currency"} object (or null) and is
+    far more reliable than the release endpoint's own lowest_price.
+    """
     from config import PRICE_CURRENCY_CODE
     try:
-        data = _get(f"{BASE_URL}/releases/{release_id}",
-                    params={"curr_abbr": PRICE_CURRENCY_CODE})
-        community = data.get("community", {}) or {}
+        release = _get(f"{BASE_URL}/releases/{release_id}")
+        community = release.get("community", {}) or {}
+
+        stats = _get(f"{BASE_URL}/marketplace/stats/{release_id}",
+                     params={"curr_abbr": PRICE_CURRENCY_CODE})
+        price_obj = stats.get("lowest_price") or {}
+        lowest_price = price_obj.get("value") if isinstance(price_obj, dict) else None
+
         return {
             "have": community.get("have", 0) or 0,
             "want": community.get("want", 0) or 0,
-            "lowest_price": data.get("lowest_price"),
-            "num_for_sale": data.get("num_for_sale", 0) or 0,
+            "lowest_price": lowest_price,
+            "num_for_sale": int(stats.get("num_for_sale", 0) or 0),
         }
     except Exception:
         return {"have": 0, "want": 0, "lowest_price": None, "num_for_sale": 0}
