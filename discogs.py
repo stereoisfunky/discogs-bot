@@ -197,6 +197,46 @@ def build_taste_profile(collection: list[dict], wantlist: list[dict], seed=None)
     }
 
 
+def pick_anchors(collection: list[dict], n: int = 3, seed=None) -> list[dict]:
+    """Pick N records from the collection, weighted toward the long tail.
+
+    Records by rarer artists/styles (within this collection) are more likely to be
+    chosen, so the daily 'starting point' rotates away from the obvious favourites.
+    """
+    import random
+    from collections import Counter
+
+    if not collection:
+        return []
+    rng = random.Random(seed)
+
+    artist_counts: Counter = Counter()
+    style_counts: Counter = Counter()
+    for item in collection:
+        artist_counts.update(item.get("artists") or [])
+        style_counts.update(item.get("styles") or [])
+
+    def weight(item):
+        a = min((artist_counts[x] for x in item.get("artists") or []), default=1)
+        s = min((style_counts[x] for x in item.get("styles") or []), default=1)
+        # rarer -> higher weight
+        return 1.0 / (a + s)
+
+    weights = [weight(it) for it in collection]
+    k = min(n, len(collection))
+    # weighted sample without replacement
+    chosen = []
+    pool = list(range(len(collection)))
+    pool_w = list(weights)
+    for _ in range(k):
+        idx = rng.choices(pool, weights=pool_w, k=1)[0]
+        pos = pool.index(idx)
+        pool.pop(pos)
+        pool_w.pop(pos)
+        chosen.append(collection[idx])
+    return chosen
+
+
 def format_profile_for_prompt(profile: dict) -> str:
     total = profile["total_collection"] + profile["total_wantlist"]
 

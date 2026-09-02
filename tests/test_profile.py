@@ -30,3 +30,17 @@ def test_format_profile_mentions_long_tail_and_crosstab(sample_collection, sampl
     text = discogs.format_profile_for_prompt(p)
     assert "Less-explored corners" in text
     assert "by decade" in text
+
+
+def test_pick_anchors_deterministic_and_favours_long_tail(sample_collection):
+    a = discogs.pick_anchors(sample_collection, n=3, seed=7)
+    b = discogs.pick_anchors(sample_collection, n=3, seed=7)
+    assert a == b
+    assert len(a) == 3
+    for rec in a:
+        assert "title" in rec and "artists" in rec
+
+
+def test_pick_anchors_handles_small_collection():
+    tiny = [{"id": "1", "title": "Only One", "artists": ["Solo"], "genres": [], "styles": [], "year": 2000}]
+    assert len(discogs.pick_anchors(tiny, n=3, seed=1)) == 1
