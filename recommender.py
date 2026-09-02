@@ -206,12 +206,15 @@ def _ask_claude(taste_summary: str, mode: str, anchors: list[str],
 
     message = client.messages.create(
         model="claude-opus-5",
-        max_tokens=1500,
+        max_tokens=8000,
         thinking={"type": "adaptive"},
         output_config={"effort": "medium"},
         system=SYSTEM_PROMPT,
         messages=[{"role": "user", "content": user_message}],
     )
+
+    if message.stop_reason == "max_tokens":
+        raise ValueError("Claude response hit max_tokens before completing the JSON array")
 
     raw = "".join(b.text for b in message.content if b.type == "text").strip()
     raw = re.sub(r"^```[a-z]*\n?", "", raw)
