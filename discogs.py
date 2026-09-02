@@ -355,23 +355,6 @@ def get_release_info(release_id: str) -> dict:
         return {"have": 0, "want": 0, "lowest_price": None, "num_for_sale": 0}
 
 
-def calculate_rarity(have: int, want: int) -> tuple[str, str]:
-    """
-    Returns (emoji_bar, label) based on how many collectors own the release.
-    Lower `have` count = rarer.
-    """
-    if have == 0:
-        return "💎💎💎💎💎", "Extremely Rare"
-    elif have < 50:
-        return "💎💎💎💎", "Very Rare"
-    elif have < 300:
-        return "💎💎💎", "Rare"
-    elif have < 1500:
-        return "💎💎", "Uncommon"
-    else:
-        return "💎", "Common"
-
-
 def get_owned_ids(collection: list[dict], wantlist: list[dict]) -> set[str]:
     return {item["id"] for item in collection + wantlist}
 
