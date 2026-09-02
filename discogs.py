@@ -3,8 +3,10 @@ Discogs API helpers using the REST API directly.
 """
 import json
 import os
+import random
 import re
 import time
+from collections import Counter
 from datetime import datetime, timezone
 import requests
 from config import DISCOGS_TOKEN, DISCOGS_USERNAME, CACHE_PATH, CACHE_TTL_HOURS
@@ -134,9 +136,6 @@ def _parse_basic(item: dict) -> dict:
 # ---------------------------------------------------------------------------
 
 def build_taste_profile(collection: list[dict], wantlist: list[dict], seed=None) -> dict:
-    import random
-    from collections import Counter
-
     all_items = collection + wantlist
     genres: Counter = Counter()
     styles: Counter = Counter()
@@ -203,9 +202,6 @@ def pick_anchors(collection: list[dict], n: int = 3, seed=None) -> list[dict]:
     Records by rarer artists/styles (within this collection) are more likely to be
     chosen, so the daily 'starting point' rotates away from the obvious favourites.
     """
-    import random
-    from collections import Counter
-
     if not collection:
         return []
     rng = random.Random(seed)

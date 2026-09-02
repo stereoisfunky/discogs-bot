@@ -17,6 +17,10 @@ def init_db():
                 title       TEXT,
                 format      TEXT,
                 rating      INTEGER,
+                genre       TEXT,
+                style       TEXT,
+                year        INTEGER,
+                mode        TEXT,
                 sent_at     TEXT NOT NULL
             )
         """)
@@ -31,8 +35,9 @@ def init_db():
         ]:
             try:
                 conn.execute(f"ALTER TABLE suggestions ADD COLUMN {col} {definition}")
-            except Exception:
-                pass
+            except sqlite3.OperationalError as e:
+                if "duplicate column" not in str(e).lower():
+                    raise
         conn.commit()
 
 
