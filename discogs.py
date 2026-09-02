@@ -133,7 +133,8 @@ def _parse_basic(item: dict) -> dict:
 # Taste profile builder
 # ---------------------------------------------------------------------------
 
-def build_taste_profile(collection: list[dict], wantlist: list[dict]) -> dict:
+def build_taste_profile(collection: list[dict], wantlist: list[dict], seed=None) -> dict:
+    import random
     from collections import Counter
 
     all_items = collection + wantlist
@@ -142,26 +143,55 @@ def build_taste_profile(collection: list[dict], wantlist: list[dict]) -> dict:
     artists: Counter = Counter()
     labels: Counter = Counter()
     decades: Counter = Counter()
+    # genre -> Counter(decade -> count)
+    genre_decade: dict[str, Counter] = {}
 
     for item in all_items:
-        genres.update(item.get("genres") or [])
-        styles.update(item.get("styles") or [])
+        item_genres = item.get("genres") or []
+        item_styles = item.get("styles") or []
+        genres.update(item_genres)
+        styles.update(item_styles)
         artists.update(item.get("artists") or [])
         labels.update(item.get("labels") or [])
         year = item.get("year")
+        decade_label = None
         if year:
             try:
-                decade = (int(year) // 10) * 10
-                decades[f"{decade}s"] += 1
+                decade_label = f"{(int(year) // 10) * 10}s"
+                decades[decade_label] += 1
             except (ValueError, TypeError):
-                pass
+                decade_label = None
+        if decade_label:
+            for g in item_genres:
+                genre_decade.setdefault(g, Counter())[decade_label] += 1
+
+    top_genres = genres.most_common(10)
+    # "Recurring" styles = owned in real numbers; the rest is discovery territory.
+    top_styles = [(s, n) for s, n in styles.most_common(15) if n >= 2] or styles.most_common(15)
+
+    # Long-tail sample: styles/artists below the head, with low counts, reshuffled per seed.
+    rng = random.Random(seed)
+    head_style_names = {s for s, _ in top_styles}
+    head_artist_names = {a for a, _ in artists.most_common(20)}
+    tail_styles = [s for s, n in styles.items() if s not in head_style_names and 1 <= n <= 6]
+    tail_artists = [a for a, n in artists.items() if a not in head_artist_names and 1 <= n <= 6]
+    rng.shuffle(tail_styles)
+    rng.shuffle(tail_artists)
+
+    genre_decades = {
+        g: sorted(genre_decade.get(g, {}).items())
+        for g, _ in top_genres[:5]
+    }
 
     return {
-        "top_genres": genres.most_common(10),
-        "top_styles": styles.most_common(15),
+        "top_genres": top_genres,
+        "top_styles": top_styles,
         "top_artists": artists.most_common(20),
         "top_labels": labels.most_common(10),
         "top_decades": sorted(decades.items()),
+        "genre_decades": genre_decades,
+        "long_tail_styles": tail_styles[:10],
+        "long_tail_artists": tail_artists[:10],
         "total_collection": len(collection),
         "total_wantlist": len(wantlist),
     }
@@ -178,14 +208,25 @@ def format_profile_for_prompt(profile: dict) -> str:
         "",
         "Genre breakdown (percentage of total collection):",
     ]
-    for g, n in profile["top_genres"]:
+    for g, n in profile["top_genres"][:8]:
         lines.append(f"  {g}: {pct(n)}  ({n} records)")
 
     lines += ["", "Style breakdown:"]
-    for s, n in profile["top_styles"]:
+    for s, n in profile["top_styles"][:12]:
         lines.append(f"  {s}: {pct(n)}  ({n} records)")
 
+    lines += ["", "Top genres by decade:"]
+    for g, buckets in profile["genre_decades"].items():
+        if buckets:
+            inner = ", ".join(f"{d} {n}" for d, n in buckets)
+            lines.append(f"  {g}: {inner}")
+
     lines += [
+        "",
+        "Less-explored corners of the collection (styles owned in small numbers — good discovery territory):",
+        "  " + ", ".join(profile["long_tail_styles"]) if profile["long_tail_styles"] else "  (none)",
+        "Less-explored artists (owned in small numbers):",
+        "  " + ", ".join(profile["long_tail_artists"]) if profile["long_tail_artists"] else "  (none)",
         "",
         "Decades:  " + ", ".join(f"{d} ({n})" for d, n in profile["top_decades"]),
         "Artists:  " + ", ".join(a for a, _ in profile["top_artists"][:12]),
