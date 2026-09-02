@@ -39,18 +39,32 @@ log = logging.getLogger(__name__)
 
 def format_suggestion(s: dict) -> str:
     year_str = f" ({s['year']})" if s.get("year") else ""
-    fmt_emoji = "📼" if s.get("format", "").lower() == "cassette" else "🎵"
-    have = s.get("have", 0)
-    want = s.get("want", 0)
-    rarity_bar = s.get("rarity_bar", "💎")
-    rarity_label = s.get("rarity_label", "")
+    fmt_emoji = "\U0001F4FC" if s.get("format", "").lower() == "cassette" else "\U0001F3B5"
+
+    price = s.get("lowest_price")
+    num = s.get("num_for_sale", 0) or 0
+    have = s.get("have", 0) or 0
+    want = s.get("want", 0) or 0
+
+    if price is not None:
+        sym = config.PRICE_CURRENCY_SYMBOL
+        price_str = f"From {sym}{price:g} · {num} for sale · {have} own / {want} want"
+    else:
+        price_str = f"Price unavailable · {have} own / {want} want"
+
+    fallback_note = ""
+    if s.get("reissue_fallback") and s.get("original_price"):
+        sym = config.PRICE_CURRENCY_SYMBOL
+        fallback_note = (
+            f"\n_(original pressing runs ~{sym}{s['original_price']:g}; "
+            f"this points to the {s.get('year', 'reissue')} reissue)_"
+        )
 
     return (
         f"{fmt_emoji} *{s['artist']}* – _{s['title']}{year_str}_\n\n"
         f"{s['why']}\n\n"
-        f"*Rarity:* {rarity_bar} {rarity_label}\n"
-        f"_{have} collectors own it · {want} want it_\n\n"
-        f"🔗 [View on Discogs]({s['discogs_url']})"
+        f"{price_str}{fallback_note}\n\n"
+        f"\U0001F517 [View on Discogs]({s['discogs_url']})"
     )
 
 
