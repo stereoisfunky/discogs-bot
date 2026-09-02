@@ -1,11 +1,12 @@
 """
 Uses Claude to generate a vinyl/cassette suggestion based on the user's taste profile,
-then resolves it to a real Discogs release with community rarity stats.
+then resolves it to a real Discogs release with price and availability.
 """
 import json
 import re
 import anthropic
 
+import config
 from config import ANTHROPIC_API_KEY
 import discogs
 import database
@@ -21,19 +22,25 @@ def pick_mode(weights: dict, rng: _random.Random) -> str:
 
 def score_candidate(candidate: dict, info: dict, recent_genres: list[str],
                     recent_styles: list[str], profile: dict, mode: str,
-                    weights: dict, discoverable_range=(200, 3000)) -> float:
+                    weights: dict, discoverable_range=(200, 3000),
+                    jitter: float = 0.0) -> float:
     genre = candidate.get("genre", "")
     style = candidate.get("style", "")
+    genre_cf = genre.casefold()
+    style_cf = style.casefold()
+
+    recent_genres_cf = {g.casefold() for g in recent_genres}
+    recent_styles_cf = {s.casefold() for s in recent_styles}
 
     novelty = 0.0
-    if genre and genre not in recent_genres:
+    if genre and genre_cf not in recent_genres_cf:
         novelty += 0.5
-    if style and style not in recent_styles:
+    if style and style_cf not in recent_styles_cf:
         novelty += 0.5
 
-    top_genres = {g for g, _ in profile.get("top_genres", [])}
-    top_styles = {s for s, _ in profile.get("top_styles", [])}
-    g_in, s_in = genre in top_genres, style in top_styles
+    top_genres = {g.casefold() for g, _ in profile.get("top_genres", [])}
+    top_styles = {s.casefold() for s, _ in profile.get("top_styles", [])}
+    g_in, s_in = genre_cf in top_genres, style_cf in top_styles
     if mode == "core":
         fit = 1.0 if (g_in and s_in) else 0.0
     elif mode == "adjacent":
@@ -50,7 +57,8 @@ def score_candidate(candidate: dict, info: dict, recent_genres: list[str],
     return (weights["novelty"] * novelty
             + weights["mode_fit"] * fit
             + weights["discoverable"] * disc
-            - weights["price_band"] * price_pen)
+            - weights["price_band"] * price_pen
+            + jitter)
 
 
 def _pressing_result(pressing: dict, info: dict, reissue_fallback: bool,
@@ -67,6 +75,22 @@ def _pressing_result(pressing: dict, info: dict, reissue_fallback: bool,
         "reissue_fallback": reissue_fallback,
         "original_price": original_price,
     }
+
+
+def _probe_set(pressings: list[dict]) -> list[dict]:
+    """Price-relevant window: oldest (in case it's cheapest) plus the 4 newest
+    reissues, de-duplicated by id, at most 5 entries."""
+    if not pressings:
+        return []
+    ordered = [pressings[0]] + pressings[-4:]
+    out: list[dict] = []
+    seen: set = set()
+    for p in ordered:
+        if p["id"] in seen:
+            continue
+        seen.add(p["id"])
+        out.append(p)
+    return out
 
 
 def choose_pressing(pressings: list[dict], pressing_note: str, fetch_info,
@@ -94,7 +118,7 @@ def choose_pressing(pressings: list[dict], pressing_note: str, fetch_info,
             return _pressing_result(oldest, oi, False, None)
         original_price = oi.get("lowest_price")
         best, best_info = None, None
-        for p in pressings[1:4]:
+        for p in pressings[-4:]:
             pi = info_for(p)
             if not affordable(pi):
                 continue
@@ -106,7 +130,7 @@ def choose_pressing(pressings: list[dict], pressing_note: str, fetch_info,
 
     # "any"
     best, best_info = None, None
-    for p in pressings[:4]:
+    for p in _probe_set(pressings):
         pi = info_for(p)
         if not affordable(pi):
             continue
@@ -166,11 +190,9 @@ MODE — today's target:
 """
 
 
-def _ask_claude(taste_summary: str, mode: str, anchors: list[str],
-                already_suggested: list[str], recent_artists: list[str],
-                rated_attrs: dict, feedback: str = "") -> list[dict]:
-    client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
-
+def _build_user_message(taste_summary, mode, anchors, already_suggested,
+                        recent_artists, rated_attrs, rated_titles, feedback=""):
+    """Assemble the user-turn prompt for Claude. Pure — no API calls."""
     anchor_block = ""
     if anchors:
         anchor_block = ("\n\nAnchor records the collector owns — propose things in dialogue "
@@ -179,7 +201,7 @@ def _ask_claude(taste_summary: str, mode: str, anchors: list[str],
     exclusion = ""
     if already_suggested:
         exclusion = ("\n\nDo NOT propose any of these already-sent records:\n"
-                     + "\n".join(f"- {s}" for s in already_suggested[-30:]))
+                     + "\n".join(f"- {s}" for s in already_suggested[:30]))
 
     artist_exclusion = ""
     if recent_artists:
@@ -196,7 +218,12 @@ def _ask_claude(taste_summary: str, mode: str, anchors: list[str],
     if disliked_bits:
         taste_feedback += "\nResponded poorly to: " + ", ".join(disliked_bits) + "."
 
-    user_message = (
+    if rated_titles.get("liked"):
+        taste_feedback += "\n\nThe collector rated these highly (4-5 stars):\n" + "\n".join(f"- {s}" for s in rated_titles["liked"])
+    if rated_titles.get("disliked"):
+        taste_feedback += "\n\nThe collector rated these poorly (1-2 stars):\n" + "\n".join(f"- {s}" for s in rated_titles["disliked"])
+
+    return (
         f"Collector's taste profile:\n\n{taste_summary}"
         f"{taste_feedback}{anchor_block}{exclusion}{artist_exclusion}"
         f"\n\nToday's mode: {mode.upper()}."
@@ -204,9 +231,18 @@ def _ask_claude(taste_summary: str, mode: str, anchors: list[str],
         "\n\nPropose 5 candidates. Respond only with the JSON array."
     )
 
+
+def _ask_claude(taste_summary: str, mode: str, anchors: list[str],
+                already_suggested: list[str], recent_artists: list[str],
+                rated_attrs: dict, rated_titles: dict, feedback: str = "") -> list[dict]:
+    client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
+
+    user_message = _build_user_message(taste_summary, mode, anchors, already_suggested,
+                                       recent_artists, rated_attrs, rated_titles, feedback)
+
     message = client.messages.create(
         model="claude-opus-5",
-        max_tokens=8000,
+        max_tokens=16000,
         thinking={"type": "adaptive"},
         output_config={"effort": "medium"},
         system=SYSTEM_PROMPT,
@@ -225,10 +261,26 @@ def _ask_claude(taste_summary: str, mode: str, anchors: list[str],
     return parsed
 
 
+def _filter_candidates(candidates, recent_artists_norm, owned_titles, already_suggested):
+    """Drop candidates that are owned, reuse a recent artist, lack fields, or were already sent."""
+    viable = []
+    for c in candidates:
+        artist = c.get("artist", "")
+        title = c.get("title", "")
+        if not artist or not title:
+            continue
+        if discogs.normalize(artist) in recent_artists_norm:
+            continue
+        if (discogs.normalize(artist), discogs.normalize(title)) in owned_titles:
+            continue
+        if f"{artist} – {title}" in already_suggested:
+            continue
+        viable.append(c)
+    return viable
+
+
 def get_suggestion(max_rounds: int = 2) -> dict | None:
     """Build a profile, ask Claude for candidates, score, resolve, pick a pressing."""
-    import config
-
     print("Loading Discogs collection and wantlist…")
     collection, wantlist = discogs.fetch_collection_and_wantlist()
     print(f"  {len(collection)} collection + {len(wantlist)} wantlist items")
@@ -251,9 +303,11 @@ def get_suggestion(max_rounds: int = 2) -> dict | None:
     history = database.get_history(limit=50)
     already_suggested = [f"{h['artist']} – {h['title']}" for h in history]
     recent_artists = database.get_recent_artists(limit=10)
+    recent_artists_norm = {discogs.normalize(a) for a in recent_artists}
     recent_genres = database.get_recent_genres(limit=10)
     recent_styles = database.get_recent_styles(limit=10)
     rated_attrs = database.get_rated_attributes()
+    rated_titles = database.get_rated_history()
 
     rejected_feedback = ""
 
@@ -261,25 +315,15 @@ def get_suggestion(max_rounds: int = 2) -> dict | None:
         print(f"Asking Claude for candidates (round {rnd}/{max_rounds})…")
         try:
             candidates = _ask_claude(taste_summary, mode, anchors, already_suggested,
-                                     recent_artists, rated_attrs, feedback=rejected_feedback)
+                                     recent_artists, rated_attrs, rated_titles,
+                                     feedback=rejected_feedback)
         except (json.JSONDecodeError, KeyError, IndexError, ValueError, TypeError) as e:
             print(f"  Claude response parse error: {e}")
             continue
 
         # Hard filters
-        viable = []
-        for c in candidates:
-            artist = c.get("artist", "")
-            title = c.get("title", "")
-            if not artist or not title:
-                continue
-            if artist in recent_artists:
-                continue
-            if (discogs.normalize(artist), discogs.normalize(title)) in owned_titles:
-                continue
-            if f"{artist} – {title}" in already_suggested:
-                continue
-            viable.append(c)
+        viable = _filter_candidates(candidates, recent_artists_norm, owned_titles,
+                                    already_suggested)
 
         # Resolve + score
         scored = []
@@ -292,7 +336,8 @@ def get_suggestion(max_rounds: int = 2) -> dict | None:
             head_info = discogs.get_release_info(pressings[0]["id"])
             score = score_candidate(c, head_info, recent_genres, recent_styles,
                                     profile, mode, config.SCORE_WEIGHTS,
-                                    discoverable_range=tuple(config.DISCOVERABLE_HAVE_RANGE))
+                                    discoverable_range=tuple(config.DISCOVERABLE_HAVE_RANGE),
+                                    jitter=rng.uniform(0, 0.1))
             scored.append((score, c, pressings, head_info))
 
         scored.sort(key=lambda t: t[0], reverse=True)
@@ -329,9 +374,13 @@ def get_suggestion(max_rounds: int = 2) -> dict | None:
                 "original_price": chosen["original_price"],
             }
 
-        rejected_feedback = ("\n\nThe previous candidates were all rejected (owned, "
-                             "already suggested, unavailable, or too expensive). "
-                             "Propose 5 completely different ones.")
+        round_rejects = [f"{c.get('artist','')} – {c.get('title','')}" for c in candidates]
+        already_suggested = round_rejects + already_suggested
+        rejected_feedback = (
+            "\n\nThese were already proposed this session and rejected — do NOT repeat them:\n"
+            + "\n".join(f"- {r}" for r in round_rejects)
+            + "\nPropose 5 completely different records."
+        )
 
     print("Could not find a valid suggestion after all rounds.")
     return None

@@ -149,3 +149,99 @@ def test_get_suggestion_end_to_end(monkeypatch, temp_db, sample_collection, samp
     assert out["lowest_price"] == 20.0
     assert "mode" in out
     assert out["discogs_url"] in ("u1", "u2")
+
+
+def test_build_user_message_includes_most_recent_history():
+    recent = [f"Artist{i} – Album{i}" for i in range(50)]  # newest-first
+    msg = recommender._build_user_message(
+        "PROFILE", "core", [], recent, [],
+        {"liked": {}, "disliked": {}}, {"liked": [], "disliked": []})
+    assert "Artist0 – Album0" in msg      # the newest pick must be excluded
+    assert "Artist49 – Album49" not in msg  # the 50th-oldest need not be
+
+
+def test_choose_pressing_any_reaches_cheap_late_reissue():
+    pressings = [_mk("p0", 1977), _mk("p1", 1985), _mk("p2", 1992),
+                 _mk("p3", 2001), _mk("p4", 2011), _mk("p5", 2019)]
+    info = {
+        "p0": {"lowest_price": 180.0, "num_for_sale": 3, "have": 1, "want": 1},
+        "p1": {"lowest_price": 90.0, "num_for_sale": 2, "have": 1, "want": 1},
+        "p2": {"lowest_price": 70.0, "num_for_sale": 1, "have": 1, "want": 1},
+        "p3": {"lowest_price": 45.0, "num_for_sale": 4, "have": 1, "want": 1},
+        "p4": {"lowest_price": 14.0, "num_for_sale": 9, "have": 1, "want": 1},  # cheapest, index 4
+        "p5": {"lowest_price": 22.0, "num_for_sale": 6, "have": 1, "want": 1},
+    }
+    res = recommender.choose_pressing(pressings, "any", info.__getitem__, absurd_price=80.0)
+    assert res["id"] == "p4"
+
+
+def test_choose_pressing_original_absurd_falls_back_to_newest_cheap():
+    pressings = [_mk("og", 1977), _mk("m1", 1990), _mk("m2", 2001),
+                 _mk("m3", 2012), _mk("m4", 2020)]
+    info = {
+        "og": {"lowest_price": 300.0, "num_for_sale": 2, "have": 9, "want": 9},
+        "m1": {"lowest_price": 120.0, "num_for_sale": 1, "have": 1, "want": 1},
+        "m2": {"lowest_price": 60.0, "num_for_sale": 2, "have": 1, "want": 1},
+        "m3": {"lowest_price": 18.0, "num_for_sale": 7, "have": 1, "want": 1},   # newest window, cheapest
+        "m4": {"lowest_price": 25.0, "num_for_sale": 5, "have": 1, "want": 1},
+    }
+    res = recommender.choose_pressing(pressings, "original", info.__getitem__, absurd_price=80.0)
+    assert res["id"] == "m3"
+    assert res["reissue_fallback"] is True
+    assert res["original_price"] == 300.0
+
+
+def test_score_mode_fit_is_case_insensitive():
+    prof = {"top_genres": [("Electronic", 100)], "top_styles": [("Dub Techno", 50)]}
+    kw = dict(recent_genres=[], recent_styles=[], profile=prof, weights=WEIGHTS,
+              discoverable_range=(200, 3000), mode="core")
+    hit = recommender.score_candidate(
+        {"genre": "electronic", "style": "dub techno", "est_price_band": "mid"},
+        {"have": 1000}, **kw)
+    miss = recommender.score_candidate(
+        {"genre": "Jazz", "style": "Bebop", "est_price_band": "mid"},
+        {"have": 1000}, **kw)
+    assert hit > miss
+
+
+def test_filter_candidates_drops_owned_recent_and_sent():
+    owned = {(_discogs.normalize("The Congos"), _discogs.normalize("Heart Of The Congos"))}
+    cands = [
+        {"artist": "The Congos", "title": "Heart Of The Congos"},  # owned
+        {"artist": "sun ra", "title": "Lanquidity"},               # recent artist (normalized)
+        {"artist": "Pole", "title": "1"},                          # already sent
+        {"artist": "", "title": "Nameless"},                       # missing field
+        {"artist": "Coil", "title": "Horse Rotorvator"},           # OK
+    ]
+    out = recommender._filter_candidates(
+        cands,
+        recent_artists_norm={_discogs.normalize("Sun Ra")},
+        owned_titles=owned,
+        already_suggested=["Pole – 1"],
+    )
+    assert [c["artist"] for c in out] == ["Coil"]
+
+
+def test_get_suggestion_second_round_when_first_all_filtered(monkeypatch, temp_db,
+                                                             sample_collection, sample_wantlist):
+    monkeypatch.setattr(_discogs, "fetch_collection_and_wantlist",
+                        lambda: (sample_collection, sample_wantlist))
+    calls = {"n": 0}
+    def fake_ask(*a, **k):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            return [{"artist": "The Congos", "title": "Heart Of The Congos", "year": 1977,
+                     "format": "Vinyl", "genre": "Reggae", "style": "Roots Reggae",
+                     "pressing_note": "any", "est_price_band": "mid", "reason": "owned"}]
+        return [{"artist": "Coil", "title": "Horse Rotorvator", "year": 1986,
+                 "format": "Vinyl", "genre": "Electronic", "style": "Industrial",
+                 "pressing_note": "any", "est_price_band": "mid", "reason": "good"}]
+    monkeypatch.setattr(recommender, "_ask_claude", fake_ask)
+    monkeypatch.setattr(_discogs, "search_release", lambda a, t: [
+        {"id": f"{a}-1", "year": "1986", "format": "Vinyl", "url": "u"}])
+    monkeypatch.setattr(_discogs, "get_release_info",
+                        lambda rid: {"have": 900, "want": 200, "lowest_price": 25.0, "num_for_sale": 3})
+    out = recommender.get_suggestion()
+    assert out is not None
+    assert out["artist"] == "Coil"
+    assert calls["n"] == 2
