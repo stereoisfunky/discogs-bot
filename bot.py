@@ -168,7 +168,10 @@ async def catchup_check(context: ContextTypes.DEFAULT_TYPE):
         await daily_suggestion(context)
 
 
-async def daily_suggestion(context: ContextTypes.DEFAULT_TYPE):
+async def daily_suggestion(context: ContextTypes.DEFAULT_TYPE, force: bool = False):
+    if not force and database.suggestion_sent_today():
+        log.info("Daily suggestion already sent today — skipping.")
+        return
     log.info("Running daily suggestion job…")
     suggestion = await asyncio.to_thread(recommender.get_suggestion)
     if suggestion is None:
@@ -217,11 +220,16 @@ def main():
         minute=config.DAILY_MINUTE,
         tzinfo=datetime.timezone.utc,
     )
-    app.job_queue.run_daily(daily_suggestion, time=send_time)
+    # misfire_grace_time=None → still fire after the Mac wakes from sleep, however
+    # late; daily_suggestion is idempotent per day so a late fire can't double-send.
+    app.job_queue.run_daily(daily_suggestion, time=send_time,
+                            job_kwargs={"misfire_grace_time": None})
     log.info(f"Daily suggestion scheduled at {config.DAILY_HOUR:02d}:{config.DAILY_MINUTE:02d} UTC")
 
-    # Watchdog: every 15 min, catch missed suggestions (e.g. Mac was asleep at scheduled time)
-    app.job_queue.run_repeating(catchup_check, interval=900, first=60)
+    # Watchdog: every 15 min, catch missed suggestions (e.g. Mac was asleep at scheduled time).
+    # misfire_grace_time=None so apscheduler runs it on wake instead of skipping the missed tick.
+    app.job_queue.run_repeating(catchup_check, interval=900, first=60,
+                                job_kwargs={"misfire_grace_time": None})
     log.info("Catch-up watchdog scheduled every 15 minutes")
 
     # Catch-up: if the Mac was asleep at scheduled time, send on startup
